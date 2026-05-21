@@ -1,5 +1,4 @@
-﻿import cgi
-import io
+﻿import io
 import json
 import os
 import re
@@ -11,6 +10,8 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime
+from email.parser import BytesParser
+from email.policy import default
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -56,6 +57,42 @@ def safe_name(filename: str) -> str:
     name = Path(filename).name
     name = re.sub(r"[^\w\-.\u4e00-\u9fff]", "_", name)
     return name[:120] or f"file_{uuid.uuid4().hex[:8]}.txt"
+
+
+def parse_multipart_form_data(body: bytes, content_type: str) -> tuple[dict, dict]:
+    raw_message = (
+        f"Content-Type: {content_type}\r\n"
+        "MIME-Version: 1.0\r\n\r\n"
+    ).encode("utf-8") + body
+
+    message = BytesParser(policy=default).parsebytes(raw_message)
+    if not message.is_multipart():
+        raise ValueError("请求体不是 multipart/form-data")
+
+    fields = {}
+    files = {}
+
+    for part in message.iter_parts():
+        disposition = part.get("Content-Disposition", "")
+        if "form-data" not in disposition:
+            continue
+
+        name = part.get_param("name", header="Content-Disposition")
+        if not name:
+            continue
+
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+
+        if filename is None:
+            fields[name] = payload.decode("utf-8", errors="ignore")
+        else:
+            files[name] = {
+                "filename": filename,
+                "data": payload,
+            }
+
+    return fields, files
 
 
 def create_job() -> str:
@@ -385,7 +422,7 @@ def process_document_job(job_id: str, source_text: str, level: str, saved_output
 
 
 class AppHandler(SimpleHTTPRequestHandler):
-    server_version = "WenjingEngine/1.2"
+    server_version = "WenjingEngine/1.3"
 
     def do_POST(self):
         if self.path == "/api/process":
@@ -407,8 +444,8 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def handle_process(self):
         try:
-            ctype, _ = cgi.parse_header(self.headers.get("content-type", ""))
-            if ctype != "multipart/form-data":
+            content_type = self.headers.get("content-type", "")
+            if "multipart/form-data" not in content_type.lower():
                 self.respond_json(HTTPStatus.BAD_REQUEST, {"error": "请求格式必须是 multipart/form-data"})
                 return
 
@@ -417,25 +454,17 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.respond_json(HTTPStatus.BAD_REQUEST, {"error": "文件过大，最大 25MB"})
                 return
 
-            form = cgi.FieldStorage(
-                fp=self.rfile,
-                headers=self.headers,
-                environ={
-                    "REQUEST_METHOD": "POST",
-                    "CONTENT_TYPE": self.headers.get("content-type", ""),
-                },
-            )
+            body = self.rfile.read(content_length)
+            fields, files = parse_multipart_form_data(body, content_type)
 
-            file_item = form["file"] if "file" in form else None
-            level_item = form["level"] if "level" in form else None
-
-            if file_item is None or not getattr(file_item, "filename", ""):
+            file_item = files.get("file")
+            if file_item is None or not file_item.get("filename"):
                 self.respond_json(HTTPStatus.BAD_REQUEST, {"error": "请上传文件"})
                 return
 
-            level = level_item.value if level_item is not None else "标准"
-            filename = safe_name(file_item.filename)
-            file_data = file_item.file.read()
+            level = fields.get("level", "标准")
+            filename = safe_name(file_item["filename"])
+            file_data = file_item["data"]
 
             if not file_data:
                 self.respond_json(HTTPStatus.BAD_REQUEST, {"error": "文件内容为空"})
