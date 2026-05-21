@@ -3,6 +3,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -57,6 +58,25 @@ def safe_name(filename: str) -> str:
     name = Path(filename).name
     name = re.sub(r"[^\w\-.\u4e00-\u9fff]", "_", name)
     return name[:120] or f"file_{uuid.uuid4().hex[:8]}.txt"
+
+
+def get_app_version() -> dict:
+    commit = os.getenv("RENDER_GIT_COMMIT", "").strip()
+    if not commit:
+        try:
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=BASE_DIR,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except Exception:
+            commit = "unknown"
+
+    return {
+        "commit": commit[:7] if commit and commit != "unknown" else commit,
+        "model": OPENAI_MODEL,
+    }
 
 
 def parse_multipart_form_data(body: bytes, content_type: str) -> tuple[dict, dict]:
@@ -422,7 +442,7 @@ def process_document_job(job_id: str, source_text: str, level: str, saved_output
 
 
 class AppHandler(SimpleHTTPRequestHandler):
-    server_version = "WenjingEngine/1.3"
+    server_version = "WenjingEngine/1.4"
 
     def do_POST(self):
         if self.path == "/api/process":
@@ -433,6 +453,9 @@ class AppHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/healthz":
             self.respond_json(HTTPStatus.OK, {"ok": True})
+            return
+        if self.path == "/api/version":
+            self.respond_json(HTTPStatus.OK, get_app_version())
             return
         if self.path.startswith("/api/download/"):
             self.handle_download()

@@ -150,3 +150,20 @@ startBtn.addEventListener("click", async () => {
     startBtn.textContent = "开始处理";
   }
 });
+
+async function loadAppVersion() {
+  const versionNode = document.getElementById("appVersion");
+  if (!versionNode) return;
+
+  try {
+    const resp = await fetch("/api/version");
+    if (!resp.ok) throw new Error("version api failed");
+    const data = await resp.json();
+    const shortCommit = data.commit && data.commit !== "unknown" ? data.commit : "unknown";
+    versionNode.textContent = `v-${shortCommit}`;
+  } catch {
+    versionNode.textContent = "v-unknown";
+  }
+}
+
+loadAppVersion();
