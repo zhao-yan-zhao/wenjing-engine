@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>文净引擎 | 论文文本优化平台</title>
-  <meta name="description" content="文净引擎提供论文文本优化、表达润色、结构梳理与格式辅助，一键上传文档即可生成优化稿。" />
+  <title>文净引擎 | AIGC率检测与论文降重平台</title>
+  <meta name="description" content="文净引擎提供AIGC疑似率分析、定向降重、学术表达优化，支持用户与管理员协作管理。" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet">
@@ -20,7 +20,10 @@
         <a href="#pricing">套餐</a>
         <a href="#faq">常见问题</a>
       </nav>
-      <button class="btn btn-ghost">登录</button>
+      <div class="nav-actions">
+        <button class="btn btn-ghost" id="openAuthBtn">登录/注册</button>
+        <button class="btn btn-ghost hidden" id="logoutBtn">退出</button>
+      </div>
     </div>
   </header>
 
@@ -28,22 +31,23 @@
     <section class="hero">
       <div class="container hero-grid">
         <div>
-          <p class="eyebrow">论文文本优化平台</p>
-          <h1>上传文档，快速生成更自然的论文表达</h1>
-          <p class="lead">支持 `.docx / .txt / .md`，一键执行语句重写、学术风格统一、段落流畅度提升与格式检查，帮助你更高效完成论文打磨。</p>
+          <p class="eyebrow">AIGC疑似率分析 + 定向降重平台</p>
+          <h1>先检测风险，再定向降重，保留论文核心内容</h1>
+          <p class="lead">系统会先评估段落级AIGC疑似信号，再对高风险段落进行优先改写，输出前后对比指标，避免全篇无差别重写。</p>
           <div class="hero-actions">
-            <button class="btn btn-primary">立即上传文档</button>
-            <button class="btn btn-ghost">查看演示报告</button>
+            <button class="btn btn-primary" id="jumpUploaderBtn">立即开始</button>
+            <button class="btn btn-ghost" id="jumpDetectBtn">体验AIGC检测</button>
           </div>
           <ul class="hero-tags">
-            <li>全程加密传输</li>
-            <li>分钟级返回结果</li>
-            <li>支持硕博论文场景</li>
+            <li>段落级风险定位</li>
+            <li>定向改写与降重</li>
+            <li>用户端+管理员端</li>
           </ul>
         </div>
-        <div class="card uploader">
-          <h3>智能处理面板</h3>
-          <p>拖拽上传文档，选择优化强度后开始处理。</p>
+
+        <div class="card uploader" id="uploaderCard">
+          <h3>论文处理面板</h3>
+          <p>登录后可上传文档，查看真实进度与AIGC疑似率变化。</p>
           <div class="dropzone" id="dropzone">
             <input id="fileInput" type="file" accept=".docx,.txt,.md" hidden>
             <p><strong>点击或拖拽上传</strong></p>
@@ -69,7 +73,44 @@
             </div>
           </div>
 
-          <p class="hint" id="statusText">尚未选择文件</p>
+          <p class="hint" id="statusText">请先登录后上传文件</p>
+          <div class="metric hidden" id="metricBox"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="detect" class="section alt">
+      <div class="container">
+        <h2>AIGC疑似率检测</h2>
+        <p class="lead">粘贴一段文本，快速查看疑似分值、风险标签和高风险句子提示。</p>
+        <div class="card detect-box">
+          <textarea id="checkText" rows="7" placeholder="在此粘贴待检测文本..."></textarea>
+          <div class="detect-actions">
+            <button class="btn btn-primary" id="checkBtn">检测AIGC疑似率</button>
+          </div>
+          <div class="detect-result" id="checkResult"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="dashboard" class="section hidden">
+      <div class="container">
+        <h2>用户中心</h2>
+        <div class="card">
+          <p id="userInfoText">未登录</p>
+          <h3>我的最近任务</h3>
+          <div id="myJobs"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="adminPanel" class="section hidden">
+      <div class="container">
+        <h2>管理员面板</h2>
+        <div class="grid grid-3">
+          <article class="card"><h3>统计概览</h3><div id="adminStats">加载中...</div></article>
+          <article class="card"><h3>用户列表</h3><div id="adminUsers">加载中...</div></article>
+          <article class="card"><h3>任务列表</h3><div id="adminJobs">加载中...</div></article>
         </div>
       </div>
     </section>
@@ -79,16 +120,16 @@
         <h2>核心功能</h2>
         <div class="grid grid-3">
           <article class="card feature">
-            <h3>表达优化</h3>
-            <p>重构高重复句式，减少模板化表达，让语义更连贯自然。</p>
+            <h3>AIGC率分析</h3>
+            <p>基于重复率、模板化短语、句长波动等信号进行段落风险估计。</p>
           </article>
           <article class="card feature">
-            <h3>学术语气统一</h3>
-            <p>针对论文语域进行句法和词汇微调，保持学术规范风格。</p>
+            <h3>定向降重机制</h3>
+            <p>优先改写高风险段落，保留低风险段落和原始论证结构。</p>
           </article>
           <article class="card feature">
-            <h3>结构建议</h3>
-            <p>识别段落衔接问题，给出章节过渡与逻辑增强提示。</p>
+            <h3>多角色协作</h3>
+            <p>支持用户端任务追踪与管理员端全局管理。</p>
           </article>
         </div>
       </div>
@@ -101,17 +142,17 @@
           <article>
             <span>01</span>
             <h3>上传文稿</h3>
-            <p>导入待优化论文文本，系统自动识别结构。</p>
+            <p>导入待优化文本，系统提取段落并完成初步风险评估。</p>
           </article>
           <article>
             <span>02</span>
-            <h3>选择模式</h3>
-            <p>按需求选择标准、增强或深度优化方案。</p>
+            <h3>定向改写</h3>
+            <p>按风险等级与强度策略改写高风险段落，实时显示处理进度。</p>
           </article>
           <article>
             <span>03</span>
-            <h3>下载结果</h3>
-            <p>获取优化稿与差异报告，快速对照修改。</p>
+            <h3>查看报告</h3>
+            <p>返回处理引擎、AIGC率变化和下载结果。</p>
           </article>
         </div>
       </div>
@@ -126,10 +167,9 @@
             <p class="amount">¥9.9 <small>/ 次</small></p>
             <ul>
               <li>最多 3000 字</li>
-              <li>基础表达优化</li>
-              <li>24h 内可下载</li>
+              <li>AIGC基础检测</li>
+              <li>标准强度处理</li>
             </ul>
-            <button class="btn btn-ghost block">选择</button>
           </article>
           <article class="card price hot">
             <p class="hot-tag">推荐</p>
@@ -137,20 +177,18 @@
             <p class="amount">¥59 <small>/ 月</small></p>
             <ul>
               <li>每月 15 万字额度</li>
-              <li>深度学术润色</li>
-              <li>差异对照报告</li>
+              <li>增强/深度处理</li>
+              <li>任务历史追踪</li>
             </ul>
-            <button class="btn btn-primary block">选择</button>
           </article>
           <article class="card price">
             <h3>团队版</h3>
             <p class="amount">¥299 <small>/ 月</small></p>
             <ul>
-              <li>多人协作账号</li>
-              <li>项目空间管理</li>
-              <li>专属客服支持</li>
+              <li>管理员控制台</li>
+              <li>用户与任务管理</li>
+              <li>专属技术支持</li>
             </ul>
-            <button class="btn btn-ghost block">联系销售</button>
           </article>
         </div>
       </div>
@@ -161,16 +199,16 @@
         <h2>常见问题</h2>
         <div class="faq">
           <details>
-            <summary>上传文档会被保存吗？</summary>
-            <p>默认在处理完成后短期留存，超期自动清除；你也可手动立即删除。</p>
+            <summary>AIGC率是官方检测结果吗？</summary>
+            <p>不是。页面显示的是平台内部估计分值，用于辅助定位风险段落与优化方向。</p>
           </details>
           <details>
-            <summary>支持哪些文件格式？</summary>
-            <p>目前支持 `.doc/.docx/.txt/.md`，后续会增加更多学术写作格式支持。</p>
+            <summary>会不会改坏论文内容？</summary>
+            <p>系统优先做定向改写并尽量保持原意，建议最终结合人工审校后再提交。</p>
           </details>
           <details>
-            <summary>结果能直接用于提交吗？</summary>
-            <p>建议将优化稿作为辅助参考，结合你的研究内容进行最终人工审校。</p>
+            <summary>管理员能看到什么？</summary>
+            <p>管理员可查看用户数量、任务统计和全局任务列表，不会暴露用户密码。</p>
           </details>
         </div>
       </div>
@@ -183,7 +221,21 @@
     </div>
   </footer>
 
+  <div class="modal hidden" id="authModal">
+    <div class="modal-card">
+      <button class="modal-close" id="closeAuthBtn">×</button>
+      <h3>登录 / 注册</h3>
+      <label class="field">用户名<input id="authUsername" type="text" placeholder="3-24位字母数字下划线" /></label>
+      <label class="field">密码<input id="authPassword" type="password" placeholder="至少6位" /></label>
+      <div class="auth-actions">
+        <button class="btn btn-primary" id="loginBtn">登录</button>
+        <button class="btn btn-ghost" id="registerBtn">注册</button>
+      </div>
+      <p class="hint" id="authStatus"></p>
+      <p class="hint">默认管理员：`admin / admin123456`（可在环境变量修改）</p>
+    </div>
+  </div>
+
   <script src="./script.js"></script>
 </body>
 </html>
-

@@ -7,6 +7,7 @@
   --primary-2: #0a6f5a;
   --line: #d9e0ea;
   --accent: #ffb84d;
+  --danger: #c64646;
 }
 
 * {
@@ -24,6 +25,8 @@ body {
   line-height: 1.6;
 }
 
+.hidden { display: none !important; }
+
 .container {
   width: min(1120px, calc(100% - 32px));
   margin: 0 auto;
@@ -34,7 +37,7 @@ body {
   top: 0;
   z-index: 10;
   backdrop-filter: blur(8px);
-  background: rgba(243, 245, 249, 0.8);
+  background: rgba(243, 245, 249, 0.88);
   border-bottom: 1px solid rgba(217, 224, 234, 0.8);
 }
 
@@ -50,7 +53,12 @@ body {
   color: var(--text);
   font-weight: 800;
   text-decoration: none;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.4px;
+}
+
+.nav-actions {
+  display: flex;
+  gap: 10px;
 }
 
 nav {
@@ -83,7 +91,7 @@ nav a {
 
 h1 {
   margin: 8px 0 12px;
-  font-size: clamp(32px, 5vw, 52px);
+  font-size: clamp(30px, 5vw, 50px);
   line-height: 1.12;
 }
 
@@ -125,10 +133,6 @@ h1 {
   box-shadow: 0 16px 40px rgba(24, 33, 47, 0.06);
 }
 
-.uploader h3 {
-  margin-top: 0;
-}
-
 .dropzone {
   border: 2px dashed #9dd4c7;
   border-radius: 14px;
@@ -138,9 +142,7 @@ h1 {
   cursor: pointer;
 }
 
-.dropzone p {
-  margin: 0;
-}
+.dropzone p { margin: 0; }
 
 .hint {
   color: var(--muted);
@@ -153,13 +155,16 @@ h1 {
   font-weight: 600;
 }
 
-select {
+.field input,
+.field select,
+textarea {
   margin-top: 6px;
   width: 100%;
   padding: 11px;
   border: 1px solid var(--line);
   border-radius: 10px;
   font: inherit;
+  background: #fff;
 }
 
 .btn {
@@ -217,6 +222,15 @@ select {
   transition: width 0.4s ease;
 }
 
+.metric {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid #dce5f2;
+  background: #f8fbff;
+  font-size: 13px;
+}
+
 .section {
   padding: 42px 0;
 }
@@ -240,11 +254,6 @@ select {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.feature h3,
-.price h3 {
-  margin-top: 0;
-}
-
 .steps article {
   background: #fff;
   border: 1px solid var(--line);
@@ -255,6 +264,15 @@ select {
 .steps span {
   font-weight: 800;
   color: var(--primary-2);
+}
+
+.detect-actions {
+  margin-top: 10px;
+}
+
+.detect-result {
+  margin-top: 12px;
+  font-size: 14px;
 }
 
 .amount {
@@ -310,6 +328,40 @@ summary {
 .footer {
   padding: 24px 0 40px;
   color: var(--muted);
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(12, 18, 30, 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 20;
+}
+
+.modal-card {
+  width: min(460px, calc(100% - 24px));
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid #d8e1ed;
+  padding: 18px;
+  position: relative;
+}
+
+.modal-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  border: 0;
+  background: transparent;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.auth-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
 }
 
 @media (max-width: 980px) {

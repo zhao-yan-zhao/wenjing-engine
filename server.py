@@ -1,7 +1,8 @@
-﻿import io
+import io
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import threading
@@ -13,6 +14,7 @@ import zipfile
 from datetime import datetime
 from email.parser import BytesParser
 from email.policy import default
+from hashlib import pbkdf2_hmac
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -21,6 +23,9 @@ from urllib.parse import unquote
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "outputs"
+DATA_DIR = BASE_DIR / "data"
+USERS_FILE = DATA_DIR / "users.json"
+
 MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_AI_CHARS = 12000
 AI_CHUNK_SIZE = 10000
@@ -28,9 +33,17 @@ AI_CHUNK_OVERLAP = 400
 
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True)
 
 JOBS = {}
 JOBS_LOCK = threading.Lock()
+SESSIONS = {}
+SESSIONS_LOCK = threading.Lock()
+USERS_LOCK = threading.Lock()
+
+
+def now_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def load_dotenv(path: Path) -> None:
@@ -50,11 +63,151 @@ def load_dotenv(path: Path) -> None:
 
 
 load_dotenv(BASE_DIR / ".env")
+
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123456")
+
+
+def read_json_file(path: Path, default_value):
+    if not path.exists():
+        return default_value
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default_value
+
+
+def write_json_file(path: Path, value) -> None:
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def hash_password(password: str, salt_hex: str | None = None) -> str:
+    if salt_hex is None:
+        salt_hex = secrets.token_hex(16)
+    salt = bytes.fromhex(salt_hex)
+    key = pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
+    return f"{salt_hex}${key.hex()}"
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    if "$" not in hashed:
+        return False
+    salt_hex, key_hex = hashed.split("$", 1)
+    calc = hash_password(password, salt_hex)
+    return calc.split("$", 1)[1] == key_hex
+
+
+def ensure_default_admin() -> None:
+    with USERS_LOCK:
+        users = read_json_file(USERS_FILE, [])
+        if any(u.get("username") == ADMIN_USERNAME for u in users):
+            return
+
+        users.append(
+            {
+                "username": ADMIN_USERNAME,
+                "password_hash": hash_password(ADMIN_PASSWORD),
+                "role": "admin",
+                "created_at": now_str(),
+            }
+        )
+        write_json_file(USERS_FILE, users)
+
+
+def get_user(username: str):
+    with USERS_LOCK:
+        users = read_json_file(USERS_FILE, [])
+        for user in users:
+            if user.get("username") == username:
+                return user
+    return None
+
+
+def create_user(username: str, password: str) -> tuple[bool, str]:
+    if not re.match(r"^[a-zA-Z0-9_]{3,24}$", username):
+        return False, "用户名需为 3-24 位字母数字下划线"
+    if len(password) < 6:
+        return False, "密码至少 6 位"
+
+    with USERS_LOCK:
+        users = read_json_file(USERS_FILE, [])
+        if any(u.get("username") == username for u in users):
+            return False, "用户名已存在"
+
+        users.append(
+            {
+                "username": username,
+                "password_hash": hash_password(password),
+                "role": "user",
+                "created_at": now_str(),
+            }
+        )
+        write_json_file(USERS_FILE, users)
+    return True, "注册成功"
+
+
+def list_users_safe():
+    with USERS_LOCK:
+        users = read_json_file(USERS_FILE, [])
+    result = []
+    for user in users:
+        result.append(
+            {
+                "username": user.get("username", ""),
+                "role": user.get("role", "user"),
+                "created_at": user.get("created_at", ""),
+            }
+        )
+    return result
+
+
+def create_session(username: str, role: str) -> str:
+    token = secrets.token_urlsafe(32)
+    with SESSIONS_LOCK:
+        SESSIONS[token] = {
+            "username": username,
+            "role": role,
+            "created_at": now_str(),
+        }
+    return token
+
+
+def get_auth_token(headers) -> str | None:
+    auth = headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:].strip()
+    token = headers.get("X-Auth-Token", "").strip()
+    if token:
+        return token
+    return None
+
+
+def get_session_user(headers):
+    token = get_auth_token(headers)
+    if not token:
+        return None
+
+    with SESSIONS_LOCK:
+        session = SESSIONS.get(token)
+        if not session:
+            return None
+        return {
+            "token": token,
+            "username": session.get("username", ""),
+            "role": session.get("role", "user"),
+        }
+
+
+def destroy_session(token: str) -> None:
+    with SESSIONS_LOCK:
+        if token in SESSIONS:
+            del SESSIONS[token]
 
 
 def safe_name(filename: str) -> str:
@@ -76,11 +229,7 @@ def get_app_version() -> dict:
         except Exception:
             commit = "unknown"
 
-    if LLM_PROVIDER == "deepseek":
-        model_name = DEEPSEEK_MODEL
-    else:
-        model_name = OPENAI_MODEL
-
+    model_name = DEEPSEEK_MODEL if LLM_PROVIDER == "deepseek" else OPENAI_MODEL
     return {
         "commit": commit[:7] if commit and commit != "unknown" else commit,
         "provider": LLM_PROVIDER,
@@ -124,7 +273,17 @@ def parse_multipart_form_data(body: bytes, content_type: str) -> tuple[dict, dic
     return fields, files
 
 
-def create_job() -> str:
+def parse_json_body(handler) -> dict:
+    content_length = int(handler.headers.get("content-length", "0"))
+    if content_length <= 0:
+        return {}
+    raw = handler.rfile.read(content_length)
+    if not raw:
+        return {}
+    return json.loads(raw.decode("utf-8"))
+
+
+def create_job(username: str, level: str, filename: str) -> str:
     job_id = uuid.uuid4().hex[:12]
     with JOBS_LOCK:
         JOBS[job_id] = {
@@ -138,8 +297,15 @@ def create_job() -> str:
             "output_name": "",
             "bytes": 0,
             "error": "",
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "aigc_before": None,
+            "aigc_after": None,
+            "aigc_drop": None,
+            "rewrite_targets": 0,
+            "submitted_by": username,
+            "level": level,
+            "source_filename": filename,
+            "created_at": now_str(),
+            "updated_at": now_str(),
         }
     return job_id
 
@@ -150,13 +316,139 @@ def update_job(job_id: str, **kwargs) -> None:
         if not job:
             return
         job.update(kwargs)
-        job["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        job["updated_at"] = now_str()
 
 
 def get_job(job_id: str):
     with JOBS_LOCK:
         job = JOBS.get(job_id)
         return dict(job) if job else None
+
+
+def list_jobs_for_user(username: str):
+    with JOBS_LOCK:
+        jobs = [dict(v) for v in JOBS.values() if v.get("submitted_by") == username]
+    jobs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return jobs
+
+
+def list_all_jobs():
+    with JOBS_LOCK:
+        jobs = [dict(v) for v in JOBS.values()]
+    jobs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return jobs
+
+
+def analyze_text_risk(text: str) -> dict:
+    normalized = re.sub(r"\s+", " ", text or "").strip()
+    if not normalized:
+        return {
+            "score": 0,
+            "label": "无内容",
+            "signals": ["文本为空"],
+            "flagged_sentences": [],
+        }
+
+    sentences = [s.strip() for s in re.split(r"(?<=[。！？!?；;])", normalized) if s.strip()]
+    if not sentences:
+        sentences = [normalized]
+
+    total = len(sentences)
+    unique = len(set(sentences))
+    repeated_ratio = 1 - (unique / total)
+
+    lengths = [len(s) for s in sentences]
+    avg_len = sum(lengths) / len(lengths)
+    variance = sum((x - avg_len) ** 2 for x in lengths) / len(lengths)
+    std_len = variance ** 0.5
+
+    template_phrases = [
+        "综上所述",
+        "不难发现",
+        "值得注意的是",
+        "由此可见",
+        "因此可以看出",
+        "首先",
+        "其次",
+        "最后",
+        "总而言之",
+    ]
+    template_hits = sum(normalized.count(p) for p in template_phrases)
+
+    connectors = ["因此", "然而", "此外", "同时", "进一步", "总之", "总体来看"]
+    connector_hits = sum(normalized.count(c) for c in connectors)
+
+    score = 18
+    score += min(32, repeated_ratio * 100 * 0.9)
+    score += min(20, max(0, 8 - std_len) * 2.5)
+    score += min(18, template_hits * 2)
+    score += min(12, connector_hits * 0.8)
+    score = int(max(5, min(95, score)))
+
+    if score >= 75:
+        label = "高疑似"
+    elif score >= 50:
+        label = "中疑似"
+    else:
+        label = "低疑似"
+
+    sentence_scores = []
+    repeated_sentences = set([x for x in sentences if sentences.count(x) > 1])
+    for s in sentences:
+        s_score = 20
+        s_score += 15 if len(s) > 45 else 0
+        s_score += 20 if any(tp in s for tp in template_phrases) else 0
+        s_score += 15 if s in repeated_sentences else 0
+        s_score += 10 if s.count("，") >= 4 else 0
+        sentence_scores.append((s, min(95, s_score)))
+
+    sentence_scores.sort(key=lambda x: x[1], reverse=True)
+    flagged = [{"text": s, "score": sc} for s, sc in sentence_scores[:6] if sc >= 45]
+
+    signals = [
+        f"句子重复率约 {repeated_ratio * 100:.1f}%",
+        f"句长波动标准差 {std_len:.1f}",
+        f"模板化短语命中 {template_hits} 次",
+    ]
+
+    return {
+        "score": score,
+        "label": label,
+        "signals": signals,
+        "flagged_sentences": flagged,
+    }
+
+
+def split_paragraphs(text: str) -> list[str]:
+    raw = (text or "").replace("\r\n", "\n")
+    parts = re.split(r"\n\s*\n", raw)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def choose_target_paragraphs(paragraphs: list[str], level: str) -> list[int]:
+    if not paragraphs:
+        return []
+
+    threshold_map = {"标准": 62, "增强": 54, "深度": 46}
+    max_targets_map = {"标准": 8, "增强": 16, "深度": 28}
+
+    threshold = threshold_map.get(level, 62)
+    max_targets = max_targets_map.get(level, 8)
+
+    scored = []
+    for idx, para in enumerate(paragraphs):
+        risk = analyze_text_risk(para).get("score", 0)
+        scored.append((idx, risk))
+
+    candidates = [x for x in scored if x[1] >= threshold]
+    if not candidates:
+        top = sorted(scored, key=lambda x: x[1], reverse=True)[:1]
+        return [x[0] for x in top]
+
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    picked = [idx for idx, _ in candidates[:max_targets]]
+    picked.sort()
+    return picked
 
 
 def optimize_text_rule(text: str, level: str) -> str:
@@ -249,7 +541,6 @@ def extract_output_text(response_json: dict) -> str:
     merged = "\n".join(chunks).strip()
     if merged:
         return merged
-
     raise RuntimeError("AI 返回内容为空")
 
 
@@ -258,13 +549,10 @@ def optimize_text_with_openai(text: str, level: str) -> tuple[str, str]:
     if not api_key:
         raise RuntimeError("未配置 OPENAI_API_KEY")
 
-    if not text.strip():
-        raise RuntimeError("文本为空")
-
     level_rules = {
-        "标准": "以轻度润色为主，尽量保留原句。",
-        "增强": "进行中度重写，优化流畅度与衔接。",
-        "深度": "进行深度重写，提升学术表达与逻辑紧凑度。",
+        "标准": "轻度润色，保留原句结构。",
+        "增强": "中度重写，优化衔接与细节表达。",
+        "深度": "深度重写，强化学术表达与逻辑推导。",
     }
 
     payload = {
@@ -275,7 +563,7 @@ def optimize_text_with_openai(text: str, level: str) -> tuple[str, str]:
                 "content": (
                     "你是学术写作优化助手。"
                     "请仅输出优化后的正文，不要加标题、注释、Markdown、前后说明。"
-                    "保留段落结构和原意，避免虚构数据。"
+                    "保留事实、数据、引用关系，不要虚构内容。"
                 ),
             },
             {
@@ -315,8 +603,7 @@ def optimize_text_with_openai(text: str, level: str) -> tuple[str, str]:
         raise RuntimeError(f"OpenAI 请求失败：{exc}") from exc
 
     response_json = json.loads(raw.decode("utf-8"))
-    output_text = extract_output_text(response_json)
-    return output_text, OPENAI_MODEL
+    return extract_output_text(response_json), OPENAI_MODEL
 
 
 def optimize_text_with_deepseek(text: str, level: str) -> tuple[str, str]:
@@ -324,13 +611,10 @@ def optimize_text_with_deepseek(text: str, level: str) -> tuple[str, str]:
     if not api_key:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY")
 
-    if not text.strip():
-        raise RuntimeError("文本为空")
-
     level_rules = {
-        "标准": "以轻度润色为主，尽量保留原句。",
-        "增强": "进行中度重写，优化流畅度与衔接。",
-        "深度": "进行深度重写，提升学术表达与逻辑紧凑度。",
+        "标准": "轻度润色，保留原句结构。",
+        "增强": "中度重写，优化衔接与细节表达。",
+        "深度": "深度重写，强化学术表达与逻辑推导。",
     }
 
     payload = {
@@ -341,7 +625,7 @@ def optimize_text_with_deepseek(text: str, level: str) -> tuple[str, str]:
                 "content": (
                     "你是学术写作优化助手。"
                     "请仅输出优化后的正文，不要加标题、注释、Markdown、前后说明。"
-                    "保留段落结构和原意，避免虚构数据。"
+                    "保留事实、数据、引用关系，不要虚构内容。"
                 ),
             },
             {
@@ -385,13 +669,26 @@ def optimize_text_with_deepseek(text: str, level: str) -> tuple[str, str]:
     choices = response_json.get("choices", [])
     if not choices:
         raise RuntimeError("DeepSeek 返回内容为空")
-
-    message = choices[0].get("message", {})
-    content = message.get("content", "")
+    content = choices[0].get("message", {}).get("content", "")
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError("DeepSeek 返回内容为空")
 
     return content.strip(), DEEPSEEK_MODEL
+
+
+def optimize_text_with_provider(text: str, level: str) -> tuple[str, str]:
+    if not text.strip():
+        raise RuntimeError("文本为空")
+
+    if LLM_PROVIDER == "deepseek":
+        out, model = optimize_text_with_deepseek(text, level)
+        return out, f"deepseek:{model}"
+
+    if LLM_PROVIDER == "openai":
+        out, model = optimize_text_with_openai(text, level)
+        return out, f"openai:{model}"
+
+    raise RuntimeError(f"不支持的 LLM_PROVIDER: {LLM_PROVIDER}")
 
 
 def split_text_into_chunks(text: str, size: int = AI_CHUNK_SIZE, overlap: int = AI_CHUNK_OVERLAP) -> list[str]:
@@ -405,7 +702,6 @@ def split_text_into_chunks(text: str, size: int = AI_CHUNK_SIZE, overlap: int = 
 
     while start < length:
         end = min(start + size, length)
-
         if end < length:
             cut = normalized.rfind("\n", start + int(size * 0.6), end)
             if cut == -1:
@@ -419,94 +715,95 @@ def split_text_into_chunks(text: str, size: int = AI_CHUNK_SIZE, overlap: int = 
 
         if end >= length:
             break
-
         start = max(0, end - overlap)
 
     return chunks
 
 
-def optimize_text_with_provider(text: str, level: str) -> tuple[str, str]:
-    provider = LLM_PROVIDER
-    if provider == "deepseek":
-        optimized, model = optimize_text_with_deepseek(text, level)
-        return optimized, f"deepseek:{model}"
-    if provider == "openai":
-        optimized, model = optimize_text_with_openai(text, level)
-        return optimized, f"openai:{model}"
-    raise RuntimeError(f"不支持的 LLM_PROVIDER: {provider}")
-
-
-def optimize_text_with_openai_chunked(
-    text: str,
-    level: str,
-    chunks: list[str] | None = None,
-    progress_callback=None,
-) -> tuple[str, str]:
-    if chunks is None:
-        chunks = split_text_into_chunks(text)
-
-    output_parts = []
+def optimize_text_with_provider_chunked(text: str, level: str, progress_callback=None) -> tuple[str, str]:
+    chunks = split_text_into_chunks(text)
+    result_parts = []
     engine_name = ""
-    total = len(chunks)
 
     for idx, chunk in enumerate(chunks, start=1):
-        if progress_callback is not None:
-            progress_callback(idx, total)
+        if progress_callback:
+            progress_callback(idx, len(chunks))
 
         if len(chunk) > MAX_AI_CHARS:
-            raise RuntimeError(
-                f"分段后仍超限（第 {idx} 段 {len(chunk)} 字符 > {MAX_AI_CHARS}），请调小 AI_CHUNK_SIZE"
-            )
+            raise RuntimeError(f"分段后仍超限：第 {idx} 段 {len(chunk)} 字符")
 
         optimized, engine_name = optimize_text_with_provider(chunk, level)
-        output_parts.append(optimized.strip())
+        result_parts.append(optimized.strip())
 
-    merged = "\n\n".join(output_parts).strip()
-    return merged, engine_name
+    return "\n\n".join(result_parts).strip(), engine_name
 
 
 def process_document_job(job_id: str, source_text: str, level: str, saved_output: Path) -> None:
-    update_job(job_id, status="processing", progress=10, message="正在调用处理引擎...")
+    before_risk = analyze_text_risk(source_text)
+    update_job(
+        job_id,
+        status="processing",
+        progress=10,
+        message="正在分析 AIGC 风险...",
+        aigc_before=before_risk,
+    )
+
+    paragraphs = split_paragraphs(source_text)
+    target_indexes = choose_target_paragraphs(paragraphs, level)
+    update_job(
+        job_id,
+        progress=16,
+        message=f"已锁定 {len(target_indexes)} 个高风险段落，准备降重...",
+        rewrite_targets=len(target_indexes),
+    )
 
     engine = "rule-fallback"
     notice = ""
+    rewritten = list(paragraphs)
 
     try:
-        if len(source_text) <= MAX_AI_CHARS:
-            update_job(job_id, progress=35, message="AI 正在处理正文...")
-            optimized_body, engine = optimize_text_with_provider(source_text, level)
-            update_job(job_id, progress=88, message="AI 处理完成，正在生成结果...")
-        else:
-            chunks = split_text_into_chunks(source_text)
-            chunk_count = len(chunks)
+        if not target_indexes:
+            target_indexes = [0] if paragraphs else []
 
-            def on_chunk(idx: int, total: int) -> None:
-                ratio = idx / max(total, 1)
-                pct = 25 + int(ratio * 60)
-                update_job(job_id, progress=min(pct, 90), message=f"AI 分段处理中：第 {idx}/{total} 段")
+        for i, para_idx in enumerate(target_indexes, start=1):
+            para_text = rewritten[para_idx]
+            if len(para_text) <= MAX_AI_CHARS:
+                new_text, engine = optimize_text_with_provider(para_text, level)
+            else:
+                new_text, engine = optimize_text_with_provider_chunked(para_text, level, None)
 
-            optimized_body, used_model = optimize_text_with_openai_chunked(
-                source_text,
-                level,
-                chunks=chunks,
-                progress_callback=on_chunk,
-            )
-            engine = f"{used_model}:chunked({chunk_count})"
-            notice = f"文本较长，已自动分段调用 AI（共 {chunk_count} 段）"
-            update_job(job_id, progress=92, message="分段合并完成，正在写入结果...")
+            rewritten[para_idx] = new_text.strip()
+            ratio = i / max(len(target_indexes), 1)
+            pct = 20 + int(ratio * 65)
+            update_job(job_id, progress=min(pct, 90), message=f"降重处理中：第 {i}/{len(target_indexes)} 段")
+
+        optimized_body = "\n\n".join(rewritten).strip()
+        if len(target_indexes) > 1:
+            notice = f"采用定向降重：共改写 {len(target_indexes)} 个风险段落"
     except Exception as ai_exc:
-        optimized_body = optimize_text_rule(source_text, level)
+        if rewritten:
+            for idx in target_indexes:
+                rewritten[idx] = optimize_text_rule(rewritten[idx], level).strip()
+            optimized_body = "\n\n".join(rewritten).strip()
+        else:
+            optimized_body = optimize_text_rule(source_text, level).strip()
+
+        engine = "rule-fallback"
         notice = f"AI 不可用，已回退规则引擎：{ai_exc}"
-        update_job(job_id, progress=85, message="AI 不可用，正在回退规则引擎...")
+        update_job(job_id, progress=86, message="AI 不可用，正在回退规则引擎...")
+
+    after_risk = analyze_text_risk(optimized_body)
+    drop_value = max(0, before_risk.get("score", 0) - after_risk.get("score", 0))
 
     try:
         result_text = (
             "【文净引擎处理结果】\n"
-            f"处理时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"处理时间：{now_str()}\n"
             f"优化强度：{level}\n"
             f"处理引擎：{engine}\n"
+            f"AIGC疑似率(估计)：{before_risk.get('score', 0)} -> {after_risk.get('score', 0)}（下降 {drop_value}）\n"
             "----------------------------------------\n"
-            f"{optimized_body.strip()}\n"
+            f"{optimized_body}\n"
         )
 
         with saved_output.open("w", encoding="utf-8") as f:
@@ -522,25 +819,39 @@ def process_document_job(job_id: str, source_text: str, level: str, saved_output
             download_url=f"/api/download/{saved_output.name}",
             output_name=saved_output.name,
             bytes=saved_output.stat().st_size,
+            aigc_after=after_risk,
+            aigc_drop=drop_value,
         )
-    except Exception as write_exc:
+    except Exception as exc:
         update_job(
             job_id,
             status="failed",
             progress=100,
             message="结果写入失败",
-            error=str(write_exc),
-            notice=notice,
+            error=str(exc),
             engine=engine,
+            notice=notice,
         )
 
 
 class AppHandler(SimpleHTTPRequestHandler):
-    server_version = "WenjingEngine/1.4"
+    server_version = "WenjingEngine/2.0"
 
     def do_POST(self):
+        if self.path == "/api/register":
+            self.handle_register()
+            return
+        if self.path == "/api/login":
+            self.handle_login()
+            return
+        if self.path == "/api/logout":
+            self.handle_logout()
+            return
         if self.path == "/api/process":
             self.handle_process()
+            return
+        if self.path == "/api/aigc/check":
+            self.handle_aigc_check()
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
@@ -551,15 +862,129 @@ class AppHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/version":
             self.respond_json(HTTPStatus.OK, get_app_version())
             return
-        if self.path.startswith("/api/download/"):
-            self.handle_download()
+        if self.path == "/api/me":
+            self.handle_me()
+            return
+        if self.path == "/api/my/jobs":
+            self.handle_my_jobs()
+            return
+        if self.path == "/api/admin/users":
+            self.handle_admin_users()
+            return
+        if self.path == "/api/admin/jobs":
+            self.handle_admin_jobs()
+            return
+        if self.path == "/api/admin/stats":
+            self.handle_admin_stats()
             return
         if self.path.startswith("/api/job/"):
             self.handle_job_status()
             return
+        if self.path.startswith("/api/download/"):
+            self.handle_download()
+            return
         super().do_GET()
 
+    def current_user(self):
+        return get_session_user(self.headers)
+
+    def require_user(self):
+        user = self.current_user()
+        if not user:
+            self.respond_json(HTTPStatus.UNAUTHORIZED, {"error": "请先登录"})
+            return None
+        return user
+
+    def require_admin(self):
+        user = self.require_user()
+        if not user:
+            return None
+        if user.get("role") != "admin":
+            self.respond_json(HTTPStatus.FORBIDDEN, {"error": "需要管理员权限"})
+            return None
+        return user
+
+    def handle_register(self):
+        try:
+            payload = parse_json_body(self)
+            username = str(payload.get("username", "")).strip()
+            password = str(payload.get("password", ""))
+
+            ok, msg = create_user(username, password)
+            if not ok:
+                self.respond_json(HTTPStatus.BAD_REQUEST, {"error": msg})
+                return
+
+            self.respond_json(HTTPStatus.OK, {"message": msg})
+        except Exception as exc:
+            self.respond_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"注册失败: {exc}"})
+
+    def handle_login(self):
+        try:
+            payload = parse_json_body(self)
+            username = str(payload.get("username", "")).strip()
+            password = str(payload.get("password", ""))
+
+            user = get_user(username)
+            if not user or not verify_password(password, user.get("password_hash", "")):
+                self.respond_json(HTTPStatus.UNAUTHORIZED, {"error": "用户名或密码错误"})
+                return
+
+            token = create_session(username, user.get("role", "user"))
+            self.respond_json(
+                HTTPStatus.OK,
+                {
+                    "message": "登录成功",
+                    "token": token,
+                    "user": {
+                        "username": username,
+                        "role": user.get("role", "user"),
+                    },
+                },
+            )
+        except Exception as exc:
+            self.respond_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"登录失败: {exc}"})
+
+    def handle_logout(self):
+        user = self.require_user()
+        if not user:
+            return
+        destroy_session(user.get("token", ""))
+        self.respond_json(HTTPStatus.OK, {"message": "已退出登录"})
+
+    def handle_me(self):
+        user = self.require_user()
+        if not user:
+            return
+        self.respond_json(
+            HTTPStatus.OK,
+            {
+                "username": user.get("username"),
+                "role": user.get("role"),
+            },
+        )
+
+    def handle_aigc_check(self):
+        user = self.require_user()
+        if not user:
+            return
+
+        try:
+            payload = parse_json_body(self)
+            text = str(payload.get("text", "")).strip()
+            if not text:
+                self.respond_json(HTTPStatus.BAD_REQUEST, {"error": "text 不能为空"})
+                return
+
+            self.respond_json(HTTPStatus.OK, analyze_text_risk(text))
+        except Exception as exc:
+            self.respond_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"检测失败: {exc}"})
+
     def handle_process(self):
+        user = self.require_user()
+        if not user:
+            return
+
         try:
             content_type = self.headers.get("content-type", "")
             if "multipart/form-data" not in content_type.lower():
@@ -607,8 +1032,8 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.respond_json(HTTPStatus.BAD_REQUEST, {"error": "未提取到可处理文本内容"})
                 return
 
-            job_id = create_job()
-            update_job(job_id, progress=5, message="任务已入队，等待处理...")
+            job_id = create_job(user.get("username", ""), level, filename)
+            update_job(job_id, progress=6, message="任务已入队，等待处理...")
 
             worker = threading.Thread(
                 target=process_document_job,
@@ -623,13 +1048,17 @@ class AppHandler(SimpleHTTPRequestHandler):
                     "message": "任务已提交",
                     "job_id": job_id,
                     "status": "queued",
-                    "progress": 5,
+                    "progress": 6,
                 },
             )
         except Exception as exc:
             self.respond_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"服务端异常: {exc}"})
 
     def handle_job_status(self):
+        user = self.require_user()
+        if not user:
+            return
+
         job_id = unquote(self.path.replace("/api/job/", "", 1)).strip()
         if not job_id:
             self.respond_json(HTTPStatus.BAD_REQUEST, {"error": "缺少 job_id"})
@@ -640,9 +1069,55 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.respond_json(HTTPStatus.NOT_FOUND, {"error": "任务不存在"})
             return
 
+        if user.get("role") != "admin" and job.get("submitted_by") != user.get("username"):
+            self.respond_json(HTTPStatus.FORBIDDEN, {"error": "无权访问该任务"})
+            return
+
         self.respond_json(HTTPStatus.OK, job)
 
+    def handle_my_jobs(self):
+        user = self.require_user()
+        if not user:
+            return
+        jobs = list_jobs_for_user(user.get("username", ""))[:20]
+        self.respond_json(HTTPStatus.OK, {"items": jobs})
+
+    def handle_admin_users(self):
+        if not self.require_admin():
+            return
+        self.respond_json(HTTPStatus.OK, {"items": list_users_safe()})
+
+    def handle_admin_jobs(self):
+        if not self.require_admin():
+            return
+        self.respond_json(HTTPStatus.OK, {"items": list_all_jobs()[:100]})
+
+    def handle_admin_stats(self):
+        if not self.require_admin():
+            return
+
+        users = list_users_safe()
+        jobs = list_all_jobs()
+        completed = [j for j in jobs if j.get("status") == "completed"]
+        avg_drop = 0
+        if completed:
+            avg_drop = round(sum(j.get("aigc_drop") or 0 for j in completed) / len(completed), 2)
+
+        self.respond_json(
+            HTTPStatus.OK,
+            {
+                "users": len(users),
+                "jobs_total": len(jobs),
+                "jobs_completed": len(completed),
+                "avg_aigc_drop": avg_drop,
+            },
+        )
+
     def handle_download(self):
+        user = self.require_user()
+        if not user:
+            return
+
         token = unquote(self.path.replace("/api/download/", "", 1)).strip()
         if not token:
             self.send_error(HTTPStatus.BAD_REQUEST, "Bad Request")
@@ -652,6 +1127,18 @@ class AppHandler(SimpleHTTPRequestHandler):
         if not file_path.exists() or not file_path.is_file():
             self.send_error(HTTPStatus.NOT_FOUND, "File Not Found")
             return
+
+        related_job = None
+        with JOBS_LOCK:
+            for v in JOBS.values():
+                if v.get("output_name") == file_path.name:
+                    related_job = dict(v)
+                    break
+
+        if related_job and user.get("role") != "admin":
+            if related_job.get("submitted_by") != user.get("username"):
+                self.respond_json(HTTPStatus.FORBIDDEN, {"error": "无权下载该文件"})
+                return
 
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -675,11 +1162,14 @@ class AppHandler(SimpleHTTPRequestHandler):
 
 
 def run(host: str | None = None, port: int | None = None):
+    ensure_default_admin()
+
     host = host or os.getenv("HOST", "0.0.0.0")
     port = int(port or os.getenv("PORT", "8000"))
     os.chdir(BASE_DIR)
     server = ThreadingHTTPServer((host, port), AppHandler)
     print(f"Server running at http://{host}:{port}")
+    print(f"Provider: {LLM_PROVIDER}")
     print("Press Ctrl+C to stop")
     server.serve_forever()
 
