@@ -1,0 +1,188 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>文净引擎 | 论文文本优化平台</title>
+  <meta name="description" content="文净引擎提供论文文本优化、表达润色、结构梳理与格式辅助，一键上传文档即可生成优化稿。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container nav">
+      <a class="brand" href="#">文净引擎</a>
+      <nav>
+        <a href="#features">功能</a>
+        <a href="#process">流程</a>
+        <a href="#pricing">套餐</a>
+        <a href="#faq">常见问题</a>
+      </nav>
+      <button class="btn btn-ghost">登录</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-grid">
+        <div>
+          <p class="eyebrow">论文文本优化平台</p>
+          <h1>上传文档，快速生成更自然的论文表达</h1>
+          <p class="lead">支持 `.docx / .txt / .md`，一键执行语句重写、学术风格统一、段落流畅度提升与格式检查，帮助你更高效完成论文打磨。</p>
+          <div class="hero-actions">
+            <button class="btn btn-primary">立即上传文档</button>
+            <button class="btn btn-ghost">查看演示报告</button>
+          </div>
+          <ul class="hero-tags">
+            <li>全程加密传输</li>
+            <li>分钟级返回结果</li>
+            <li>支持硕博论文场景</li>
+          </ul>
+        </div>
+        <div class="card uploader">
+          <h3>智能处理面板</h3>
+          <p>拖拽上传文档，选择优化强度后开始处理。</p>
+          <div class="dropzone" id="dropzone">
+            <input id="fileInput" type="file" accept=".docx,.txt,.md" hidden>
+            <p><strong>点击或拖拽上传</strong></p>
+            <p class="hint">支持最大 25MB</p>
+          </div>
+          <label class="field">
+            优化强度
+            <select id="level">
+              <option>标准</option>
+              <option>增强</option>
+              <option>深度</option>
+            </select>
+          </label>
+          <button class="btn btn-primary block" id="startBtn">开始处理</button>
+
+          <div class="progress-wrap" id="progressWrap" hidden>
+            <div class="progress-head">
+              <span>处理进度</span>
+              <strong id="progressLabel">0%</strong>
+            </div>
+            <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+          </div>
+
+          <p class="hint" id="statusText">尚未选择文件</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="container">
+        <h2>核心功能</h2>
+        <div class="grid grid-3">
+          <article class="card feature">
+            <h3>表达优化</h3>
+            <p>重构高重复句式，减少模板化表达，让语义更连贯自然。</p>
+          </article>
+          <article class="card feature">
+            <h3>学术语气统一</h3>
+            <p>针对论文语域进行句法和词汇微调，保持学术规范风格。</p>
+          </article>
+          <article class="card feature">
+            <h3>结构建议</h3>
+            <p>识别段落衔接问题，给出章节过渡与逻辑增强提示。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="process" class="section alt">
+      <div class="container">
+        <h2>三步完成处理</h2>
+        <div class="grid grid-3 steps">
+          <article>
+            <span>01</span>
+            <h3>上传文稿</h3>
+            <p>导入待优化论文文本，系统自动识别结构。</p>
+          </article>
+          <article>
+            <span>02</span>
+            <h3>选择模式</h3>
+            <p>按需求选择标准、增强或深度优化方案。</p>
+          </article>
+          <article>
+            <span>03</span>
+            <h3>下载结果</h3>
+            <p>获取优化稿与差异报告，快速对照修改。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="pricing" class="section">
+      <div class="container">
+        <h2>套餐价格</h2>
+        <div class="grid grid-3">
+          <article class="card price">
+            <h3>体验版</h3>
+            <p class="amount">¥9.9 <small>/ 次</small></p>
+            <ul>
+              <li>最多 3000 字</li>
+              <li>基础表达优化</li>
+              <li>24h 内可下载</li>
+            </ul>
+            <button class="btn btn-ghost block">选择</button>
+          </article>
+          <article class="card price hot">
+            <p class="hot-tag">推荐</p>
+            <h3>专业版</h3>
+            <p class="amount">¥59 <small>/ 月</small></p>
+            <ul>
+              <li>每月 15 万字额度</li>
+              <li>深度学术润色</li>
+              <li>差异对照报告</li>
+            </ul>
+            <button class="btn btn-primary block">选择</button>
+          </article>
+          <article class="card price">
+            <h3>团队版</h3>
+            <p class="amount">¥299 <small>/ 月</small></p>
+            <ul>
+              <li>多人协作账号</li>
+              <li>项目空间管理</li>
+              <li>专属客服支持</li>
+            </ul>
+            <button class="btn btn-ghost block">联系销售</button>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="faq" class="section alt">
+      <div class="container">
+        <h2>常见问题</h2>
+        <div class="faq">
+          <details>
+            <summary>上传文档会被保存吗？</summary>
+            <p>默认在处理完成后短期留存，超期自动清除；你也可手动立即删除。</p>
+          </details>
+          <details>
+            <summary>支持哪些文件格式？</summary>
+            <p>目前支持 `.doc/.docx/.txt/.md`，后续会增加更多学术写作格式支持。</p>
+          </details>
+          <details>
+            <summary>结果能直接用于提交吗？</summary>
+            <p>建议将优化稿作为辅助参考，结合你的研究内容进行最终人工审校。</p>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>© 2026 文净引擎. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <script src="./script.js"></script>
+</body>
+</html>
