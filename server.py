@@ -50,8 +50,11 @@ def load_dotenv(path: Path) -> None:
 
 
 load_dotenv(BASE_DIR / ".env")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
 OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/responses")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
+DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 
 def safe_name(filename: str) -> str:
@@ -73,9 +76,15 @@ def get_app_version() -> dict:
         except Exception:
             commit = "unknown"
 
+    if LLM_PROVIDER == "deepseek":
+        model_name = DEEPSEEK_MODEL
+    else:
+        model_name = OPENAI_MODEL
+
     return {
         "commit": commit[:7] if commit and commit != "unknown" else commit,
-        "model": OPENAI_MODEL,
+        "provider": LLM_PROVIDER,
+        "model": model_name,
     }
 
 
@@ -310,6 +319,81 @@ def optimize_text_with_openai(text: str, level: str) -> tuple[str, str]:
     return output_text, OPENAI_MODEL
 
 
+def optimize_text_with_deepseek(text: str, level: str) -> tuple[str, str]:
+    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("未配置 DEEPSEEK_API_KEY")
+
+    if not text.strip():
+        raise RuntimeError("文本为空")
+
+    level_rules = {
+        "标准": "以轻度润色为主，尽量保留原句。",
+        "增强": "进行中度重写，优化流畅度与衔接。",
+        "深度": "进行深度重写，提升学术表达与逻辑紧凑度。",
+    }
+
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是学术写作优化助手。"
+                    "请仅输出优化后的正文，不要加标题、注释、Markdown、前后说明。"
+                    "保留段落结构和原意，避免虚构数据。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"优化强度：{level}。\n"
+                    f"要求：{level_rules.get(level, level_rules['标准'])}\n"
+                    "请优化下面文本：\n"
+                    f"{text}"
+                ),
+            },
+        ],
+        "stream": False,
+    }
+
+    req = urllib.request.Request(
+        DEEPSEEK_API_URL,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as http_err:
+        err_raw = http_err.read().decode("utf-8", errors="ignore")
+        try:
+            err_json = json.loads(err_raw)
+            message = err_json.get("error", {}).get("message") or err_raw
+        except json.JSONDecodeError:
+            message = err_raw or str(http_err)
+        raise RuntimeError(f"DeepSeek 接口错误：{message}") from http_err
+    except Exception as exc:
+        raise RuntimeError(f"DeepSeek 请求失败：{exc}") from exc
+
+    response_json = json.loads(raw.decode("utf-8"))
+    choices = response_json.get("choices", [])
+    if not choices:
+        raise RuntimeError("DeepSeek 返回内容为空")
+
+    message = choices[0].get("message", {})
+    content = message.get("content", "")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("DeepSeek 返回内容为空")
+
+    return content.strip(), DEEPSEEK_MODEL
+
+
 def split_text_into_chunks(text: str, size: int = AI_CHUNK_SIZE, overlap: int = AI_CHUNK_OVERLAP) -> list[str]:
     normalized = text.replace("\r\n", "\n").strip()
     if len(normalized) <= size:
@@ -341,6 +425,17 @@ def split_text_into_chunks(text: str, size: int = AI_CHUNK_SIZE, overlap: int = 
     return chunks
 
 
+def optimize_text_with_provider(text: str, level: str) -> tuple[str, str]:
+    provider = LLM_PROVIDER
+    if provider == "deepseek":
+        optimized, model = optimize_text_with_deepseek(text, level)
+        return optimized, f"deepseek:{model}"
+    if provider == "openai":
+        optimized, model = optimize_text_with_openai(text, level)
+        return optimized, f"openai:{model}"
+    raise RuntimeError(f"不支持的 LLM_PROVIDER: {provider}")
+
+
 def optimize_text_with_openai_chunked(
     text: str,
     level: str,
@@ -351,7 +446,7 @@ def optimize_text_with_openai_chunked(
         chunks = split_text_into_chunks(text)
 
     output_parts = []
-    model_name = OPENAI_MODEL
+    engine_name = ""
     total = len(chunks)
 
     for idx, chunk in enumerate(chunks, start=1):
@@ -363,11 +458,11 @@ def optimize_text_with_openai_chunked(
                 f"分段后仍超限（第 {idx} 段 {len(chunk)} 字符 > {MAX_AI_CHARS}），请调小 AI_CHUNK_SIZE"
             )
 
-        optimized, model_name = optimize_text_with_openai(chunk, level)
+        optimized, engine_name = optimize_text_with_provider(chunk, level)
         output_parts.append(optimized.strip())
 
     merged = "\n\n".join(output_parts).strip()
-    return merged, model_name
+    return merged, engine_name
 
 
 def process_document_job(job_id: str, source_text: str, level: str, saved_output: Path) -> None:
@@ -379,8 +474,7 @@ def process_document_job(job_id: str, source_text: str, level: str, saved_output
     try:
         if len(source_text) <= MAX_AI_CHARS:
             update_job(job_id, progress=35, message="AI 正在处理正文...")
-            optimized_body, used_model = optimize_text_with_openai(source_text, level)
-            engine = f"openai:{used_model}"
+            optimized_body, engine = optimize_text_with_provider(source_text, level)
             update_job(job_id, progress=88, message="AI 处理完成，正在生成结果...")
         else:
             chunks = split_text_into_chunks(source_text)
@@ -397,7 +491,7 @@ def process_document_job(job_id: str, source_text: str, level: str, saved_output
                 chunks=chunks,
                 progress_callback=on_chunk,
             )
-            engine = f"openai:{used_model}:chunked({chunk_count})"
+            engine = f"{used_model}:chunked({chunk_count})"
             notice = f"文本较长，已自动分段调用 AI（共 {chunk_count} 段）"
             update_job(job_id, progress=92, message="分段合并完成，正在写入结果...")
     except Exception as ai_exc:
