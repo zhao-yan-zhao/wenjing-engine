@@ -6,12 +6,14 @@
 
 const dropzone = document.getElementById("dropzone");
 const fileInput = document.getElementById("fileInput");
+const reportInput = document.getElementById("reportInput");
 const statusText = document.getElementById("statusText");
 const startBtn = document.getElementById("startBtn");
 const progressWrap = document.getElementById("progressWrap");
 const progressFill = document.getElementById("progressFill");
 const progressLabel = document.getElementById("progressLabel");
 const metricBox = document.getElementById("metricBox");
+const reportBoard = document.getElementById("reportBoard");
 
 const authModal = document.getElementById("authModal");
 const openAuthBtn = document.getElementById("openAuthBtn");
@@ -89,7 +91,8 @@ function showMetric(job) {
   const after = job.aigc_after?.score ?? "-";
   const drop = job.aigc_drop ?? "-";
   const targets = job.rewrite_targets ?? 0;
-  metricBox.textContent = `AIGC疑似率(估计)：${before} -> ${after}（下降 ${drop}）；定向改写段落：${targets}`;
+  const chars = job.estimated_ai_chars ?? 0;
+  metricBox.textContent = `AIGC疑似率(估计)：${before} -> ${after}（下降 ${drop}）；定向改写段落：${targets}；预计送模字符：${chars}`;
 }
 
 function hideMetric() {
@@ -97,10 +100,35 @@ function hideMetric() {
   metricBox.textContent = "";
 }
 
+function setList(targetId, items) {
+  const node = document.getElementById(targetId);
+  if (!node) return;
+  node.innerHTML = (items || [])
+    .map((item) => `<li>${item}</li>`)
+    .join("") || "<li>暂无</li>";
+}
+
+function renderVisualReport(job) {
+  const report = job.visual_report;
+  if (!report) {
+    reportBoard.classList.add("hidden");
+    return;
+  }
+
+  reportBoard.classList.remove("hidden");
+  document.getElementById("reportBefore").textContent = report.before?.score ?? "-";
+  document.getElementById("reportAfter").textContent = report.after?.score ?? "-";
+  document.getElementById("reportDrop").textContent = report.drop ?? "-";
+  document.getElementById("reportTargets").textContent = report.rewrite_targets ?? "-";
+  setList("reportBeforeSignals", report.before?.signals || []);
+  setList("reportAfterSignals", report.after?.signals || []);
+}
+
 function pickFile(file) {
   state.chosenFile = file;
   removeResultLink();
   hideMetric();
+  reportBoard.classList.add("hidden");
   resetProgress();
   setStatus(`已选择：${file.name}（${Math.ceil(file.size / 1024)} KB）`);
 }
@@ -119,6 +147,7 @@ async function pollJob(jobId) {
       setStatus(`处理完成：${Math.ceil(data.bytes / 1024)} KB；引擎：${data.engine}${noticeText}`);
       showResultLink(data.download_url, data.output_name);
       showMetric(data);
+      renderVisualReport(data);
       await loadMyJobs();
       if (state.user?.role === "admin") {
         await loadAdminPanel();
@@ -390,6 +419,7 @@ startBtn.addEventListener("click", async () => {
 
   removeResultLink();
   hideMetric();
+  reportBoard.classList.add("hidden");
   showProgress();
   setProgress(2);
 
@@ -403,6 +433,9 @@ startBtn.addEventListener("click", async () => {
     const formData = new FormData();
     formData.append("file", state.chosenFile);
     formData.append("level", level);
+    if (reportInput.files[0]) {
+      formData.append("report", reportInput.files[0]);
+    }
 
     const resp = await fetch("/api/process", {
       method: "POST",

@@ -47,12 +47,16 @@
 
         <div class="card uploader" id="uploaderCard">
           <h3>论文处理面板</h3>
-          <p>登录后可上传文档，查看真实进度与AIGC疑似率变化。</p>
+          <p>登录后可上传文档，查看真实进度与AIGC疑似率变化。若同时上传AIGC检测报告，系统会优先按报告命中的段落做定向改写。</p>
           <div class="dropzone" id="dropzone">
             <input id="fileInput" type="file" accept=".docx,.txt,.md" hidden>
             <p><strong>点击或拖拽上传</strong></p>
             <p class="hint">支持最大 25MB</p>
           </div>
+          <label class="field">
+            AIGC报告（可选）
+            <input id="reportInput" type="file" accept=".pdf,.html,.htm,.docx" />
+          </label>
           <label class="field">
             优化强度
             <select id="level">
@@ -75,6 +79,36 @@
 
           <p class="hint" id="statusText">请先登录后上传文件</p>
           <div class="metric hidden" id="metricBox"></div>
+          <div class="report-board hidden" id="reportBoard">
+            <div class="report-grid">
+              <div class="report-card">
+                <span>提交前估计AIGC率</span>
+                <strong id="reportBefore">-</strong>
+              </div>
+              <div class="report-card">
+                <span>处理后估计AIGC率</span>
+                <strong id="reportAfter">-</strong>
+              </div>
+              <div class="report-card">
+                <span>下降幅度</span>
+                <strong id="reportDrop">-</strong>
+              </div>
+              <div class="report-card">
+                <span>定向改写段落</span>
+                <strong id="reportTargets">-</strong>
+              </div>
+            </div>
+            <div class="report-signals">
+              <div>
+                <h4>提交前风险信号</h4>
+                <ul id="reportBeforeSignals"></ul>
+              </div>
+              <div>
+                <h4>处理后风险信号</h4>
+                <ul id="reportAfterSignals"></ul>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
